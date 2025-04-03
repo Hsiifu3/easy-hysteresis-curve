@@ -250,424 +250,152 @@ def parse_special_text_file(file_path, skiprows=0):
                     # 创建DataFrame
                     df = pd.DataFrame(normalized_data, columns=columns)
                     
-                    # 尝试转换为数值型
+                    # 尝试将所有列转换为数值
                     for col in df.columns:
-                        try:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
-                        except:
-                            pass
-                            
+                        df[col] = pd.to_numeric(df[col], errors='ignore')
+                    
                     return df, None
             else:
                 # 使用识别出的列位置解析数据
                 data_rows = []
                 for line in data_lines:
-                    line = line.strip()
-                    if not line:
+                    if not line.strip():
                         continue
                         
-                    # 提取每列的数据
                     row_values = []
-                    for start_pos, end_pos in column_positions:
-                        if start_pos >= len(line):
-                            value = None
+                    for start, end in column_positions:
+                        if start < len(line) and end < len(line):
+                            value = line[start:end+1].strip()
+                            row_values.append(value)
                         else:
-                            end_pos = min(end_pos, len(line) - 1)
-                            value = line[start_pos:end_pos+1].strip()
-                        row_values.append(value)
-                        
+                            row_values.append(None)
+                    
                     data_rows.append(row_values)
                 
-                # 生成默认列名
-                columns = [f"Column_{i+1}" for i in range(len(column_positions))]
-                
-                # 创建DataFrame
-                df = pd.DataFrame(data_rows, columns=columns)
-                
-                # 尝试转换为数值型
-                for col in df.columns:
-                    try:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    except:
-                        pass
-                        
-                return df, None
-        else:
-            # 假设第一行是标题行，使用空格分隔
-            columns = header_line.split()
+                if data_rows:
+                    # 生成默认列名
+                    columns = [f"Column_{i+1}" for i in range(len(column_positions))]
+                    
+                    # 创建DataFrame
+                    df = pd.DataFrame(data_rows, columns=columns)
+                    
+                    # 尝试将所有列转换为数值
+                    for col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='ignore')
+                    
+                    return df, None
+        
+        # 2. 如果上述方法失败，尝试直接按行解析
+        data_rows = []
+        for line in data_lines:
+            line = line.strip()
+            if line:
+                # 尝试将行分割为若干部分
+                parts = line.split()
+                if parts:
+                    data_rows.append(parts)
+        
+        if data_rows:
+            # 确定最大列数
+            max_cols = max(len(row) for row in data_rows)
             
-            # 如果没有足够的列名，生成默认列名
-            if not columns:
-                # 尝试确定列数
-                sample_line = data_lines[0].strip() if data_lines else ""
-                col_count = len(sample_line.split())
-                columns = [f"Column_{i+1}" for i in range(col_count)]
+            # 生成默认列名
+            columns = [f"Column_{i+1}" for i in range(max_cols)]
             
-            # 读取数据行
-            data_rows = []
-            for line in data_lines:
-                line = line.strip()
-                if line:
-                    values = line.split()
-                    data_rows.append(values)
-            
-            # 确保所有行的列数一致
-            col_count = len(columns)
+            # 处理数据，确保每行列数一致
             normalized_data = []
             for row in data_rows:
-                if len(row) < col_count:
-                    row.extend([None] * (col_count - len(row)))
-                elif len(row) > col_count:
-                    row = row[:col_count]
+                if len(row) < max_cols:
+                    row.extend([None] * (max_cols - len(row)))
                 normalized_data.append(row)
             
             # 创建DataFrame
             df = pd.DataFrame(normalized_data, columns=columns)
             
-            # 尝试转换为数值型
+            # 尝试将所有列转换为数值
             for col in df.columns:
-                try:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                except:
-                    pass
-                    
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+            
             return df, None
             
+        # 如果所有尝试都失败
+        return None, "无法解析特殊格式的文本文件"
+        
     except Exception as e:
-        logger.error(f"解析特殊格式文件出错: {str(e)}")
-        return None, f"解析特殊格式文件出错: {str(e)}"
+        logger.error(f"特殊文本文件解析失败: {str(e)}")
+        return None, f"特殊文本文件解析失败: {str(e)}"
 
-# ==================== 数据预处理函数 ====================
-
-def correct_baseline(disp, force):
-    """基线校正，消除系统偏移或飘移
+def extract_channel_data(data, disp_channel, force1_channel, force2_channel=None):
+    """提取特定通道的数据，并转换为数值类型
     
     参数:
-        disp: 位移数据
-        force: 力数据
+        data (DataFrame): 数据表
+        disp_channel (str): 位移通道名称
+        force1_channel (str): 第一个力传感器通道名称
+        force2_channel (str): 第二个力传感器通道名称(可选)
         
     返回:
-        tuple: (corrected_disp, corrected_force)
-    """
-    if len(disp) == 0 or len(force) == 0:
-        return disp, force
-        
-    # 使用线性拟合校正基线
-    x = np.arange(len(disp))
-    
-    # 拟合位移基线
-    disp_baseline = np.polyfit(x, disp, 1)
-    disp_corrected = disp - np.polyval(disp_baseline, x)
-    
-    # 拟合力基线
-    force_baseline = np.polyfit(x, force, 1)
-    force_corrected = force - np.polyval(force_baseline, x)
-    
-    return disp_corrected, force_corrected
-
-def zero_baseline(disp, force):
-    """零点校正，确保初始点在原点附近
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        
-    返回:
-        tuple: (zeroed_disp, zeroed_force)
-    """
-    if len(disp) == 0 or len(force) == 0:
-        return disp, force
-        
-    # 计算前10%数据的平均值作为零点偏移
-    n_samples = max(1, int(len(disp) * 0.1))
-    
-    disp_offset = np.mean(disp[:n_samples])
-    force_offset = np.mean(force[:n_samples])
-    
-    return disp - disp_offset, force - force_offset
-
-def remove_outliers(disp, force, threshold=3.0):
-    """移除异常值
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        threshold: 标准差倍数阈值
-        
-    返回:
-        tuple: (filtered_disp, filtered_force)
-    """
-    if len(disp) < 3 or len(force) < 3:
-        return disp, force
-        
-    # 计算位移和力的标准差
-    disp_std = np.std(disp)
-    force_std = np.std(force)
-    
-    # 计算位移和力的均值
-    disp_mean = np.mean(disp)
-    force_mean = np.mean(force)
-    
-    # 创建一个掩码，标记非异常值
-    mask = (
-        (np.abs(disp - disp_mean) < threshold * disp_std) & 
-        (np.abs(force - force_mean) < threshold * force_std)
-    )
-    
-    # 如果掩码移除了太多数据，则保持原始数据
-    if np.sum(mask) < len(disp) * 0.8:
-        logger.warning(f"异常值过多，保留原始数据")
-        return disp, force
-    
-    # 仅保留非异常数据
-    return disp[mask], force[mask]
-
-def smooth_data(disp, force, window=10):
-    """平滑数据
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        window: 平滑窗口大小
-        
-    返回:
-        tuple: (smoothed_disp, smoothed_force)
-    """
-    if len(disp) <= window or len(force) <= window:
-        return disp, force
-        
-    # 使用移动平均平滑数据
-    smoothed_disp = uniform_filter1d(disp, size=window)
-    smoothed_force = uniform_filter1d(force, size=window)
-    
-    return smoothed_disp, smoothed_force
-
-# ==================== 循环识别函数 ====================
-
-def identify_loading_cycles(disp, force, prominence=0.1, min_points=100):
-    """识别加载循环的峰谷值
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        prominence: 峰值识别突出度参数(0-1)
-        min_points: 最小循环点数
-        
-    返回:
-        tuple: (cycles, peaks, valleys)
+        tuple: (displacement, total_force, error_message)
     """
     try:
-        # 适应信号范围的突出度值
-        disp_range = np.max(disp) - np.min(disp)
-        adapted_prominence = prominence * disp_range
+        # 确保数据为数值类型，并处理可能的NaN值
+        if disp_channel not in data.columns:
+            return None, None, f"位移通道 '{disp_channel}' 不存在"
         
-        # 找出位移的峰值和谷值
-        peaks, _ = find_peaks(disp, prominence=adapted_prominence)
-        valleys, _ = find_peaks(-disp, prominence=adapted_prominence)
+        if force1_channel not in data.columns:
+            return None, None, f"力传感器通道1 '{force1_channel}' 不存在"
         
-        # 确保有足够数量的峰谷值
-        if len(peaks) == 0 or len(valleys) == 0:
-            logger.warning("未识别到峰或谷，调整参数重试")
-            # 降低突出度阈值重试
-            return identify_loading_cycles(disp, force, prominence=prominence*0.5, min_points=min_points)
+        displacement = pd.to_numeric(data[disp_channel], errors='coerce').values
         
-        # 排序所有极值点
-        all_extremes = np.sort(np.concatenate([peaks, valleys]))
+        # 提取力数据
+        force1 = pd.to_numeric(data[force1_channel], errors='coerce').values
         
-        # 初始化循环列表
-        cycles = []
+        # 计算合力
+        if force2_channel and force2_channel in data.columns:
+            force2 = pd.to_numeric(data[force2_channel], errors='coerce').values
+            total_force = force1 + force2
+        else:
+            total_force = force1
         
-        for i in range(len(all_extremes) - 1):
-            start_idx = all_extremes[i]
-            end_idx = all_extremes[i + 1]
+        # 处理NaN值
+        displacement = np.nan_to_num(displacement, nan=0.0, posinf=0.0, neginf=0.0)
+        total_force = np.nan_to_num(total_force, nan=0.0, posinf=0.0, neginf=0.0)
             
-            # 检查循环点数是否足够
-            if end_idx - start_idx >= min_points:
-                cycles.append((start_idx, end_idx))
-        
-        logger.info(f"识别到 {len(cycles)} 个加载循环")
-        return cycles, peaks, valleys
-        
+        return displacement, total_force, None
     except Exception as e:
-        logger.error(f"识别加载循环出错: {str(e)}")
-        return [], [], []
+        return None, None, str(e)
 
-def calculate_cycle_features(cycles, disp, force):
-    """计算每个循环的特征
+def preprocess_data(displacement, force, sampling_rate=None):
+    """数据预处理: 应用滑动平均滤波并消除传感器零漂
     
     参数:
-        cycles: 循环索引列表
-        disp: 位移数据
-        force: 力数据
+        displacement (ndarray): 位移数据
+        force (ndarray): 力数据
+        sampling_rate (float): 采样率(Hz)，用于计算循环持续时间
         
     返回:
-        list: 循环特征字典列表
-    """
-    features = []
-    
-    for start_idx, end_idx in cycles:
-        cycle_disp = disp[start_idx:end_idx]
-        cycle_force = force[start_idx:end_idx]
-        
-        # 计算特征
-        feature = {
-            "max_disp": np.max(cycle_disp),
-            "min_disp": np.min(cycle_disp),
-            "max_force": np.max(cycle_force),
-            "min_force": np.min(cycle_force),
-            "disp_range": np.max(cycle_disp) - np.min(cycle_disp),
-            "force_range": np.max(cycle_force) - np.min(cycle_force),
-            "start_idx": start_idx,
-            "end_idx": end_idx,
-            "length": end_idx - start_idx
-        }
-        
-        features.append(feature)
-    
-    return features
-
-# ==================== 分析函数 ====================
-
-def calculate_stiffness_and_energy(disp, force):
-    """计算刚度和能量耗散
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        
-    返回:
-        tuple: (stiffness, energy)
+        tuple: (processed_displacement, processed_force, error_message)
     """
     try:
-        # 线性拟合计算刚度
-        slope, _ = np.polyfit(disp, force, 1)
+        # 替换可能的无穷大值和NaN值
+        displacement = np.nan_to_num(displacement, nan=0.0, posinf=0.0, neginf=0.0)
+        force = np.nan_to_num(force, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # 计算闭合曲线包围的面积作为能量耗散
-        energy = calculate_hysteresis_loop_area(disp, force)
+        # 1. 应用滑动平均滤波 (窗口长度=5)
+        displacement_filtered = uniform_filter1d(displacement, size=5)
+        force_filtered = uniform_filter1d(force, size=5)
         
-        return slope, energy
-        
+        # 2. 消除传感器零漂（取前10个采样点的均值作为基准）
+        if len(displacement_filtered) >= 10 and len(force_filtered) >= 10:
+            disp_zero_drift = np.mean(displacement_filtered[:10])
+            force_zero_drift = np.mean(force_filtered[:10])
+            
+            displacement_corrected = displacement_filtered - disp_zero_drift
+            force_corrected = force_filtered - force_zero_drift
+        else:
+            displacement_corrected = displacement_filtered
+            force_corrected = force_filtered
+            
+        return displacement_corrected, force_corrected, None
     except Exception as e:
-        logger.error(f"计算刚度和能量出错: {str(e)}")
-        return 0, 0
-
-def calculate_hysteresis_loop_area(disp, force):
-    """计算滞回曲线包围的面积(能量耗散)
-    
-    参数:
-        disp: 位移数据
-        force: 力数据
-        
-    返回:
-        float: 滞回曲线面积
-    """
-    if len(disp) < 3:
-        return 0
-    
-    try:
-        # 确保数据是按位移大小排序的
-        sorted_indices = np.argsort(disp)
-        disp_sorted = disp[sorted_indices]
-        force_sorted = force[sorted_indices]
-        
-        # 使用梯形法则计算面积
-        area = np.abs(np.trapz(force_sorted, disp_sorted))
-        
-        return area
-    except Exception as e:
-        logger.error(f"计算滞回曲线面积出错: {str(e)}")
-        return 0
-
-def unit_conversion(value, from_unit, to_unit):
-    """单位转换
-    
-    参数:
-        value: 要转换的值
-        from_unit: 原单位
-        to_unit: 目标单位
-        
-    返回:
-        float: 转换后的值
-    """
-    # 定义单位转换系数
-    # 位移单位转换
-    disp_units = {
-        'mm': 1.0,
-        'cm': 10.0,
-        'm': 1000.0,
-        'in': 25.4
-    }
-    
-    # 力单位转换
-    force_units = {
-        'N': 1.0,
-        'kN': 1000.0,
-        'lbf': 4.44822
-    }
-    
-    # 检查单位类型
-    if from_unit in disp_units and to_unit in disp_units:
-        # 位移单位转换
-        return value * disp_units[from_unit] / disp_units[to_unit]
-    elif from_unit in force_units and to_unit in force_units:
-        # 力单位转换
-        return value * force_units[from_unit] / force_units[to_unit]
-    else:
-        # 不支持的单位转换
-        logger.warning(f"不支持的单位转换: {from_unit} -> {to_unit}")
-        return value
-
-def debug_plot_data(displacement, force, title="原始数据"):
-    """绘制调试用的数据图表
-    
-    参数:
-        displacement: 位移数据
-        force: 力数据
-        title: 图表标题
-    """
-    plt.figure(figsize=(10, 6))
-    plt.plot(displacement, force)
-    plt.title(title)
-    plt.xlabel("位移")
-    plt.ylabel("力")
-    plt.grid(True)
-    plt.show()
-
-def debug_plot_cycles(cycles, displacement, force, title="循环识别结果"):
-    """绘制调试用的循环识别结果
-    
-    参数:
-        cycles: 循环索引列表
-        displacement: 位移数据
-        force: 力数据
-        title: 图表标题
-    """
-    plt.figure(figsize=(10, 6))
-    
-    # 绘制原始数据
-    plt.plot(displacement, force, 'k-', alpha=0.5, label="原始数据")
-    
-    # 绘制每个循环
-    for i, (start_idx, end_idx) in enumerate(cycles):
-        cycle_disp = displacement[start_idx:end_idx]
-        cycle_force = force[start_idx:end_idx]
-        plt.plot(cycle_disp, cycle_force, label=f"循环 {i+1}")
-    
-    plt.title(title)
-    plt.xlabel("位移")
-    plt.ylabel("力")
-    plt.grid(True)
-    plt.legend()
-    plt.show()
-
-def calculate_energy_dissipation(displacement, force):
-    """计算能量耗散
-    
-    参数:
-        displacement: 位移数据
-        force: 力数据
-        
-    返回:
-        float: 能量耗散值
-    """
-    return calculate_hysteresis_loop_area(displacement, force)
+        return displacement, force, f"数据预处理错误: {str(e)}"

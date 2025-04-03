@@ -550,3 +550,124 @@ def calculate_stiffness_and_energy(disp, force):
     except Exception as e:
         logger.error(f"计算刚度和能量出错: {str(e)}")
         return 0, 0
+
+def calculate_hysteresis_loop_area(disp, force):
+    """计算滞回曲线包围的面积(能量耗散)
+    
+    参数:
+        disp: 位移数据
+        force: 力数据
+        
+    返回:
+        float: 滞回曲线面积
+    """
+    if len(disp) < 3:
+        return 0
+    
+    try:
+        # 确保数据是按位移大小排序的
+        sorted_indices = np.argsort(disp)
+        disp_sorted = disp[sorted_indices]
+        force_sorted = force[sorted_indices]
+        
+        # 使用梯形法则计算面积
+        area = np.abs(np.trapz(force_sorted, disp_sorted))
+        
+        return area
+    except Exception as e:
+        logger.error(f"计算滞回曲线面积出错: {str(e)}")
+        return 0
+
+def unit_conversion(value, from_unit, to_unit):
+    """单位转换
+    
+    参数:
+        value: 要转换的值
+        from_unit: 原单位
+        to_unit: 目标单位
+        
+    返回:
+        float: 转换后的值
+    """
+    # 定义单位转换系数
+    # 位移单位转换
+    disp_units = {
+        'mm': 1.0,
+        'cm': 10.0,
+        'm': 1000.0,
+        'in': 25.4
+    }
+    
+    # 力单位转换
+    force_units = {
+        'N': 1.0,
+        'kN': 1000.0,
+        'lbf': 4.44822
+    }
+    
+    # 检查单位类型
+    if from_unit in disp_units and to_unit in disp_units:
+        # 位移单位转换
+        return value * disp_units[from_unit] / disp_units[to_unit]
+    elif from_unit in force_units and to_unit in force_units:
+        # 力单位转换
+        return value * force_units[from_unit] / force_units[to_unit]
+    else:
+        # 不支持的单位转换
+        logger.warning(f"不支持的单位转换: {from_unit} -> {to_unit}")
+        return value
+
+def debug_plot_data(displacement, force, title="原始数据"):
+    """绘制调试用的数据图表
+    
+    参数:
+        displacement: 位移数据
+        force: 力数据
+        title: 图表标题
+    """
+    plt.figure(figsize=(10, 6))
+    plt.plot(displacement, force)
+    plt.title(title)
+    plt.xlabel("位移")
+    plt.ylabel("力")
+    plt.grid(True)
+    plt.show()
+
+def debug_plot_cycles(cycles, displacement, force, title="循环识别结果"):
+    """绘制调试用的循环识别结果
+    
+    参数:
+        cycles: 循环索引列表
+        displacement: 位移数据
+        force: 力数据
+        title: 图表标题
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # 绘制原始数据
+    plt.plot(displacement, force, 'k-', alpha=0.5, label="原始数据")
+    
+    # 绘制每个循环
+    for i, (start_idx, end_idx) in enumerate(cycles):
+        cycle_disp = displacement[start_idx:end_idx]
+        cycle_force = force[start_idx:end_idx]
+        plt.plot(cycle_disp, cycle_force, label=f"循环 {i+1}")
+    
+    plt.title(title)
+    plt.xlabel("位移")
+    plt.ylabel("力")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+def calculate_energy_dissipation(displacement, force):
+    """计算能量耗散
+    
+    参数:
+        displacement: 位移数据
+        force: 力数据
+        
+    返回:
+        float: 能量耗散值
+    """
+    return calculate_hysteresis_loop_area(displacement, force)

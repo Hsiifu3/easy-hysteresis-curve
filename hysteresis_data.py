@@ -261,443 +261,377 @@ class HysteresisData:
         else:
             return False, "已经是第一个文件"
     
-    def get_data_channels(self):
-        """获取数据的所有通道名
+    def extract_channel_data(self, disp_channel, force1_channel, force2_channel=None):
+        """提取通道数据
         
+        参数:
+            disp_channel: 位移通道名称
+            force1_channel: 力通道1名称
+            force2_channel: 力通道2名称(可选)
+            
         返回:
-            list: 通道名列表
+            tuple: (success, message)
         """
         if self.data is None:
-            logger.error("没有加载数据")
-            return []
+            return False, "没有加载数据"
         
-        columns = list(self.data.columns)
-        logger.debug(f"获取到 {len(columns)} 个数据通道")
-        return columns
+        # 提取通道数据
+        disp, force, error = ud.extract_channel_data(
+            self.data, disp_channel, force1_channel, force2_channel
+        )
+        
+        if error:
+            return False, f"提取通道数据出错: {error}"
+        
+        # 保存通道名称
+        self.disp_channel_name = disp_channel
+        self.force_channel_name = force1_channel
+        self.force2_channel_name = force2_channel
+        
+        # 保存原始数据
+        self.raw_displacement = disp
+        self.raw_force = force
+        
+        return True, "成功提取通道数据"
     
-    def get_current_file_info(self):
-        """获取当前文件的信息
-        
-        返回:
-            str: 文件信息字符串
-        """
-        if not self.file_path:
-            return "未选择文件"
-        
-        file_basename = os.path.basename(self.file_path)
-        file_count = len(self.file_paths)
-        
-        if file_count > 1:
-            return f"当前文件: {file_basename} ({self.current_file_index + 1}/{file_count})"
-        else:
-            return f"当前文件: {file_basename}"
-    
-    def set_channels(self, disp_channel, force_channel, force2_channel=None):
-        """设置位移和力通道
+    def process_data(self, cycle_count=3, peak_prominence=0.1):
+        """处理数据，识别循环
         
         参数:
-            disp_channel: 位移通道名
-            force_channel: 力通道名
-            force2_channel: 第二力通道名，可选
-            
-        返回:
-            tuple: (success, message)
-        """
-        try:
-            logger.info(f"设置通道: 位移={disp_channel}, 力1={force_channel}, 力2={force2_channel}")
-            
-            if self.data is None:
-                logger.error("没有加载数据")
-                return False, "没有加载数据"
-            
-            columns = list(self.data.columns)
-            
-            if disp_channel not in columns:
-                logger.error(f"位移通道 {disp_channel} 不存在")
-                return False, f"位移通道 {disp_channel} 不存在"
-            
-            if force_channel not in columns:
-                logger.error(f"力通道 {force_channel} 不存在")
-                return False, f"力通道 {force_channel} 不存在"
-            
-            if force2_channel and force2_channel not in columns:
-                logger.error(f"力通道2 {force2_channel} 不存在")
-                return False, f"力通道2 {force2_channel} 不存在"
-            
-            # 设置通道名
-            self.disp_channel_name = disp_channel
-            self.force_channel_name = force_channel
-            self.force2_channel_name = force2_channel
-            
-            # 提取原始数据
-            self.raw_displacement = np.array(self.data[disp_channel])
-            self.raw_force = np.array(self.data[force_channel])
-            
-            # 添加第二个力传感器数据
-            if force2_channel:
-                force2_data = np.array(self.data[force2_channel])
-                self.raw_force = self.raw_force + force2_data
-            
-            logger.info(f"成功设置通道: 位移={disp_channel}, 力1={force_channel}, 力2={force2_channel}")
-            return True, "成功设置通道"
-            
-        except Exception as e:
-            logger.error(f"设置通道出错: {str(e)}", exc_info=True)
-            return False, f"设置通道出错: {str(e)}"
-    
-    def process_data(self, params=None):
-        """处理原始数据
-        
-        参数:
-            params: 处理参数字典
-            
-        返回:
-            tuple: (success, message)
-        """
-        try:
-            logger.info("开始处理数据")
-            
-            if self.raw_displacement is None or self.raw_force is None:
-                logger.error("没有设置通道")
-                return False, "没有设置通道"
-            
-            # 默认参数
-            default_params = {
-                "baseline_correction": True,
-                "zero_baseline": True,
-                "remove_outliers": True,
-                "smooth_data": True,
-                "smooth_window": 10,
-                "peak_prominence": 0.1,
-                "min_cycle_points": 100,
-                "cycle_count": 3,
-                "start_at_cycle": 0,
-                "end_at_cycle": -1,
-                "calibrate_units": True
-            }
-            
-            # 更新参数
-            self.params = default_params.copy()
-            if params:
-                self.params.update(params)
-            
-            logger.debug(f"处理参数: {self.params}")
-            
-            # 1. 数据预处理
-            disp = self.raw_displacement.copy()
-            force = self.raw_force.copy()
-            
-            # 2. 基线校正
-            if self.params["baseline_correction"]:
-                disp, force = ud.correct_baseline(disp, force)
-            
-            # 3. 零点校正
-            if self.params["zero_baseline"]:
-                disp, force = ud.zero_baseline(disp, force)
-            
-            # 4. 异常值移除
-            if self.params["remove_outliers"]:
-                disp, force = ud.remove_outliers(disp, force)
-            
-            # 5. 平滑处理
-            if self.params["smooth_data"]:
-                disp, force = ud.smooth_data(disp, force, window=self.params["smooth_window"])
-            
-            # 保存处理后的数据
-            self.processed_displacement = disp
-            self.processed_force = force
-            
-            # 组合为处理后的数据
-            self.processed_data = np.column_stack((disp, force))
-            
-            logger.info("数据处理完成")
-            return True, "数据处理完成"
-            
-        except Exception as e:
-            logger.error(f"数据处理出错: {str(e)}", exc_info=True)
-            return False, f"数据处理出错: {str(e)}"
-    
-    def identify_cycles(self, peak_prominence=0.1, min_cycle_points=100):
-        """识别循环加载
-        
-        参数:
+            cycle_count: 循环次数
             peak_prominence: 峰值识别阈值
-            min_cycle_points: 一个循环最少点数
             
         返回:
             tuple: (success, message)
         """
         try:
-            logger.info(f"开始识别循环加载: peak_prominence={peak_prominence}, min_cycle_points={min_cycle_points}")
+            if self.data is None or self.data.empty:
+                return False, "没有数据可处理"
             
-            if self.processed_displacement is None or self.processed_force is None:
-                logger.error("请先处理数据")
-                return False, "请先处理数据"
+            # 检查是否已经提取了通道数据
+            if self.raw_displacement is None or self.raw_force is None:
+                return False, "请先提取通道数据（使用extract_channel_data）"
             
-            # 获取处理后的数据
-            disp = self.processed_displacement
-            force = self.processed_force
+            # 预处理数据
+            disp_processed, force_processed, _ = ud.preprocess_data(self.raw_displacement, self.raw_force)
+            
+            # 保存预处理后的数据
+            self.processed_displacement = disp_processed
+            self.processed_force = force_processed
+            self.processed_data = (disp_processed, force_processed)
             
             # 识别循环
-            cycles, peaks, valleys = ud.identify_loading_cycles(
-                disp, force, prominence=peak_prominence, min_points=min_cycle_points
+            cycles, cycle_features, error = ud.identify_cycles_by_direction(
+                disp_processed, 
+                force_processed, 
+                cycle_count=cycle_count,
+                min_prominence=peak_prominence,
+                start_threshold=0.05
             )
             
-            if len(cycles) == 0:
-                logger.warning("未识别到循环加载")
-                return False, "未识别到循环加载，请调整识别参数"
+            if error:
+                return False, f"循环识别失败: {error}"
             
             # 保存循环数据
             self.cycles = cycles
-            self.cycle_peaks = peaks
-            self.cycle_valleys = valleys
+            self.cycle_features = cycle_features
             
-            # 计算每个循环的特征
-            self.cycle_features = ud.calculate_cycle_features(cycles, disp, force)
+            # 保存处理参数
+            self.params = {
+                'displacement_channel': getattr(self, 'disp_channel_name', None),
+                'force_channel': getattr(self, 'force_channel_name', None),
+                'force2_channel': getattr(self, 'force2_channel_name', None),
+                'cycle_count': cycle_count,
+                'peak_prominence': peak_prominence
+            }
             
-            message = f"识别到 {len(cycles)} 个循环加载"
-            logger.info(message)
-            return True, message
+            return True, f"成功识别 {len(cycles)} 个循环"
             
         except Exception as e:
-            logger.error(f"识别循环加载出错: {str(e)}", exc_info=True)
-            return False, f"识别循环加载出错: {str(e)}"
+            logger.error(f"处理数据出错: {str(e)}", exc_info=True)
+            return False, f"处理数据出错: {str(e)}"
     
-    def get_cycle_data(self, cycle_index):
-        """获取指定索引的循环数据
+    def calculate_stiffness(self):
+        """计算等效刚度
         
-        参数:
-            cycle_index: 循环索引
-            
         返回:
-            tuple: (x, y) 循环的位移和力数据
-        """
-        if self.cycles is None or not 0 <= cycle_index < len(self.cycles):
-            logger.error(f"无效的循环索引: {cycle_index}")
-            return None, None
-        
-        # 获取循环的索引范围
-        start, end = self.cycles[cycle_index]
-        
-        # 提取位移和力数据
-        disp = self.processed_displacement[start:end]
-        force = self.processed_force[start:end]
-        
-        return disp, force
-    
-    def get_equivalent_stiffness(self, cycle_indices=None):
-        """计算指定循环的等效刚度
-        
-        参数:
-            cycle_indices: 循环索引列表，默认为None，表示全部循环
-            
-        返回:
-            tuple: (success, results)
+            tuple: (success, results, message)
         """
         try:
-            if self.cycles is None or self.cycle_features is None:
-                logger.error("请先识别循环加载")
-                return False, "请先识别循环加载"
+            if self.cycles is None or not self.cycles:
+                return False, None, "没有循环数据可以计算刚度"
             
-            # 默认使用全部循环
-            if cycle_indices is None:
-                cycle_indices = range(len(self.cycles))
+            if self.cycle_features is None or not self.cycle_features:
+                return False, None, "没有循环特征点数据可以计算刚度"
             
-            results = {}
+            # 计算每个循环的等效刚度
+            cycle_stiffness = {}
+            all_stiffness = []
             
-            for idx in cycle_indices:
-                if 0 <= idx < len(self.cycles):
-                    disp, force = self.get_cycle_data(idx)
+            for cycle_num, features in self.cycle_features.items():
+                pos_peak = features.get('positive_peak')
+                neg_peak = features.get('negative_peak')
+                
+                if pos_peak and neg_peak:
+                    pos_x, pos_y = pos_peak
+                    neg_x, neg_y = neg_peak
                     
-                    # 计算刚度和能量耗散
-                    stiffness, energy = ud.calculate_stiffness_and_energy(disp, force)
+                    # 计算等效刚度 (斜率)
+                    delta_x = pos_x - neg_x
+                    delta_y = pos_y - neg_y
                     
-                    # 获取循环特征
-                    feature = self.cycle_features[idx] if idx < len(self.cycle_features) else {}
-                    
-                    # 保存结果
-                    results[idx] = {
-                        "cycle_index": idx,
-                        "stiffness": stiffness,
-                        "energy_dissipation": energy,
-                        "max_disp": feature.get("max_disp", 0),
-                        "min_disp": feature.get("min_disp", 0),
-                        "max_force": feature.get("max_force", 0),
-                        "min_force": feature.get("min_force", 0),
-                        "disp_range": feature.get("disp_range", 0),
-                        "force_range": feature.get("force_range", 0)
-                    }
+                    if abs(delta_x) > 1e-10:  # 避免除零错误
+                        stiffness = delta_y / delta_x
+                        
+                        # 保存到结果字典
+                        cycle_stiffness[cycle_num] = {
+                            'equivalent': stiffness,
+                            'max_disp': pos_x,
+                            'min_disp': neg_x,
+                            'max_disp_force': pos_y,
+                            'min_disp_force': neg_y
+                        }
+                        
+                        all_stiffness.append(stiffness)
             
-            logger.info(f"已计算 {len(results)} 个循环的等效刚度")
-            return True, results
+            # 计算平均等效刚度
+            avg_stiffness = sum(all_stiffness) / len(all_stiffness) if all_stiffness else 0
+            
+            # 返回结果
+            results = {
+                'cycle_stiffness': cycle_stiffness,
+                'avg_stiffness': avg_stiffness,
+                'displacement': self.processed_data[0] if self.processed_data else None,
+                'force': self.processed_data[1] if self.processed_data else None
+            }
+            
+            return True, results, ""
             
         except Exception as e:
             logger.error(f"计算等效刚度出错: {str(e)}", exc_info=True)
-            return False, f"计算等效刚度出错: {str(e)}"
-    
-    def add_workcase(self, name=None, cycle_index=0):
-        """添加当前工况的数据
-        
-        参数:
-            name: 工况名称，默认为当前文件名
-            cycle_index: 使用的循环索引
-            
-        返回:
-            tuple: (success, message)
-        """
-        try:
-            if self.cycles is None or cycle_index >= len(self.cycles):
-                logger.error("请先识别循环加载")
-                return False, "请先识别循环加载或循环索引无效"
-            
-            # 默认使用文件名作为工况名
-            if name is None and self.file_path:
-                name = os.path.splitext(os.path.basename(self.file_path))[0]
-            
-            # 获取指定循环的数据
-            disp, force = self.get_cycle_data(cycle_index)
-            
-            if disp is None or force is None:
-                logger.error(f"获取循环 {cycle_index} 数据失败")
-                return False, f"获取循环 {cycle_index} 数据失败"
-            
-            # 获取循环特征
-            if self.cycle_features and cycle_index < len(self.cycle_features):
-                feature = self.cycle_features[cycle_index]
-            else:
-                feature = {}
-            
-            # 计算等效刚度
-            stiffness, energy = ud.calculate_stiffness_and_energy(disp, force)
-            
-            # 创建工况数据
-            workcase = {
-                "name": name,
-                "displacement": disp,
-                "force": force,
-                "stiffness": stiffness,
-                "energy": energy,
-                "feature": feature,
-                "max_disp": feature.get("max_disp", 0),
-                "min_disp": feature.get("min_disp", 0),
-                "max_force": feature.get("max_force", 0),
-                "min_force": feature.get("min_force", 0)
-            }
-            
-            # 添加到工况列表
-            self.workcases.append(workcase)
-            
-            logger.info(f"已添加工况: {name}, 共 {len(self.workcases)} 个工况")
-            return True, f"已添加工况: {name}, 共 {len(self.workcases)} 个工况"
-            
-        except Exception as e:
-            logger.error(f"添加工况出错: {str(e)}", exc_info=True)
-            return False, f"添加工况出错: {str(e)}"
+            return False, None, f"计算等效刚度出错: {str(e)}"
     
     def generate_skeleton_curve(self):
         """生成骨架曲线
         
         返回:
-            tuple: (success, message)
+            tuple: (success, skeleton_data, message)
         """
-        try:
-            if not self.workcases:
-                logger.error("没有工况数据")
-                return False, "没有工况数据，请先添加工况"
-            
-            # 提取所有工况的峰值点
-            skeleton_points = []
-            
-            for wc in self.workcases:
-                # 获取位移、力和特征
-                disp = wc["displacement"]
-                force = wc["force"]
-                feature = wc["feature"]
-                
-                # 获取峰值点
-                max_disp_idx = np.argmax(disp)
-                min_disp_idx = np.argmin(disp)
-                
-                # 添加正向峰值点
-                skeleton_points.append((disp[max_disp_idx], force[max_disp_idx]))
-                
-                # 添加负向峰值点
-                skeleton_points.append((disp[min_disp_idx], force[min_disp_idx]))
-            
-            # 按位移排序
-            skeleton_points.sort(key=lambda p: p[0])
-            
-            # 保存骨架曲线
-            self.skeleton_data = skeleton_points
-            
-            message = f"已生成骨架曲线，共 {len(skeleton_points)} 个点"
-            logger.info(message)
-            return True, message
-            
-        except Exception as e:
-            logger.error(f"生成骨架曲线出错: {str(e)}", exc_info=True)
-            return False, f"生成骨架曲线出错: {str(e)}"
-    
-    def clear_workcases(self):
-        """清空工况数据
+        if self.cycles is None or self.cycle_features is None:
+            return False, None, "没有循环数据，请先处理数据"
         
-        返回:
-            tuple: (success, message)
-        """
         try:
-            self.workcases = []
-            logger.info("已清空所有工况数据")
-            return True, "已清空所有工况数据"
+            # 生成骨架曲线
+            skeleton_disp, skeleton_force, error = ud.generate_skeleton_curve_improved(
+                self.cycles, self.cycle_features
+            )
+            
+            if error:
+                return False, None, f"生成骨架曲线出错: {error}"
+            
+            # 保存骨架曲线数据
+            self.skeleton_data = (skeleton_disp, skeleton_force)
+            
+            return True, self.skeleton_data, "成功生成骨架曲线"
+        
         except Exception as e:
-            logger.error(f"清空工况数据出错: {str(e)}")
-            return False, f"清空工况数据出错: {str(e)}"
+            logger.error(f"生成骨架曲线出错: {str(e)}")
+            return False, None, f"生成骨架曲线过程中发生错误: {str(e)}"
     
-    def export_results(self, export_path):
-        """导出分析结果
+    def add_workcase(self, name=None):
+        """添加当前工况到工况列表
         
         参数:
-            export_path: 导出文件路径
+            name: 工况名称，默认为文件名
             
         返回:
             tuple: (success, message)
         """
+        if self.processed_data is None or self.cycles is None:
+            return False, "没有处理过的数据，请先处理数据"
+        
         try:
-            logger.info(f"正在导出结果到: {export_path}")
+            # 如果没有指定名称，使用文件名
+            if name is None and self.file_path:
+                name = os.path.basename(self.file_path)
+            elif name is None:
+                name = f"工况 {len(self.workcase_data) + 1}"
             
-            if not self.cycles or not self.cycle_features:
-                logger.error("没有可导出的分析结果")
-                return False, "没有可导出的分析结果，请先处理数据"
+            # 创建工况数据
+            workcase = {
+                'name': name,
+                'file_path': self.file_path,
+                'processed_data': self.processed_data,
+                'cycles': self.cycles,
+                'cycle_features': self.cycle_features,
+                'skeleton_data': self.skeleton_data
+            }
             
-            # 创建结果数据
-            results = []
+            # 添加到工况列表
+            self.workcase_data.append(workcase)
             
-            for i, feature in enumerate(self.cycle_features):
-                # 计算刚度
-                disp, force = self.get_cycle_data(i)
-                stiffness, energy = ud.calculate_stiffness_and_energy(disp, force)
+            return True, f"成功添加工况: {name}"
+        
+        except Exception as e:
+            logger.error(f"添加工况出错: {str(e)}")
+            return False, f"添加工况过程中发生错误: {str(e)}"
+    
+    def clear_workcases(self):
+        """清空工况列表
+        
+        返回:
+            tuple: (success, message)
+        """
+        self.workcase_data = []
+        return True, "已清空工况数据"
+    
+    def generate_multi_workcase_skeleton_curve(self, displacement_threshold=0.001):
+        """从多个工况数据生成综合骨架曲线
+        
+        参数:
+            displacement_threshold: 位移差值阈值，小于此值的点会被视为重复点
+            
+        返回:
+            tuple: (success, skeleton_data, message)
+        """
+        try:
+            # 1. 前置条件检查：需要至少两个工况数据
+            if len(self.workcase_data) < 2:
+                return False, None, "至少需要两个工况数据才能生成综合骨架曲线"
+            
+            # 记录详细的工况数据信息
+            logging.info(f"开始生成多工况骨架曲线，工况数量: {len(self.workcase_data)}")
+            
+            # 2. 收集所有工况的峰值点
+            all_skeleton_points = []
+            
+            # 添加原点作为基准点
+            all_skeleton_points.append((0.0, 0.0))
+            logging.info("添加原点(0.0, 0.0)作为基准点")
+            
+            # 遍历所有工况数据
+            for i, workcase in enumerate(self.workcase_data):
+                workcase_name = workcase.get('name', f"工况 {i+1}")
+                logging.info(f"处理工况 {i+1}: {workcase_name}")
                 
-                # 添加数据
-                result = {
-                    "循环编号": i + 1,
-                    "最大位移": feature.get("max_disp", 0),
-                    "最小位移": feature.get("min_disp", 0),
-                    "位移范围": feature.get("disp_range", 0),
-                    "最大力": feature.get("max_force", 0),
-                    "最小力": feature.get("min_force", 0),
-                    "力范围": feature.get("force_range", 0),
-                    "等效刚度": stiffness,
-                    "能量耗散": energy
-                }
+                # 检查工况数据是否有效
+                if not workcase.get('cycle_features'):
+                    logging.warning(f"工况 {workcase_name} 没有特征点数据，已跳过")
+                    continue
                 
-                results.append(result)
+                # 从工况的循环特征中提取峰值点
+                workcase_points = []
+                for cycle_num, features in workcase['cycle_features'].items():
+                    # 添加正向峰值点
+                    if 'positive_peak' in features and features['positive_peak'] is not None:
+                        if not features.get('anomaly', False):  # 排除标记为异常的点
+                            pos_peak = features['positive_peak']
+                            workcase_points.append(pos_peak)
+                            logging.info(f"  添加正峰值点: 循环{cycle_num}, 坐标{pos_peak}")
+                    
+                    # 添加负向峰值点
+                    if 'negative_peak' in features and features['negative_peak'] is not None:
+                        if not features.get('anomaly', False):  # 排除标记为异常的点
+                            neg_peak = features['negative_peak']
+                            workcase_points.append(neg_peak)
+                            logging.info(f"  添加负峰值点: 循环{cycle_num}, 坐标{neg_peak}")
+                
+                logging.info(f"工况 {workcase_name} 提取了 {len(workcase_points)} 个特征点")
+                all_skeleton_points.extend(workcase_points)
             
-            # 创建DataFrame并保存
-            df = pd.DataFrame(results)
-            df.to_excel(export_path, index=False)
+            # 3. 点集处理
+            logging.info(f"总共收集到 {len(all_skeleton_points)} 个特征点")
+            # 按照位移值从小到大排序所有峰值点
+            all_skeleton_points.sort(key=lambda p: p[0])
             
-            logger.info(f"结果已导出到: {export_path}")
-            return True, f"结果已导出到: {export_path}"
+            # 去除重复和过于接近的点
+            filtered_points = []
+            for point in all_skeleton_points:
+                # 检查是否与已添加的点过于接近
+                is_close = False
+                for existing_point in filtered_points:
+                    if abs(point[0] - existing_point[0]) < displacement_threshold:
+                        is_close = True
+                        logging.info(f"过滤接近点: {point} 接近于 {existing_point}")
+                        break
+                
+                if not is_close:
+                    filtered_points.append(point)
+            
+            logging.info(f"过滤后剩余 {len(filtered_points)} 个特征点")
+            
+            # 4. 生成骨架曲线
+            # 检查是否有足够的点生成骨架曲线
+            if len(filtered_points) >= 2:
+                skeleton_disp, skeleton_force = zip(*filtered_points)
+                logging.info(f"生成的骨架曲线位移值: {skeleton_disp}")
+                logging.info(f"生成的骨架曲线力值: {skeleton_force}")
+                skeleton_data = (np.array(skeleton_disp), np.array(skeleton_force))
+                self.skeleton_data = skeleton_data  # 更新类的骨架曲线数据
+                return True, skeleton_data, "成功生成多工况综合骨架曲线"
+            else:
+                return False, None, "点数不足，无法生成有效的骨架曲线"
+        
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False, None, f"生成多工况骨架曲线过程中发生错误: {str(e)}"
+            
+    def add_current_as_workcase(self):
+        """将当前处理的数据添加为工况
+        
+        返回:
+            tuple: (success, message)
+        """
+        try:
+            import copy
+            
+            # 检查是否有处理过的数据
+            if self.processed_data is None:
+                return False, "没有处理过的数据可添加"
+                
+            # 检查是否有循环数据
+            if self.cycles is None or len(self.cycles) == 0:
+                return False, "当前数据没有识别出循环"
+                
+            # 如果没有特征点数据，尝试生成
+            if self.cycle_features is None:
+                self.analyze_cycle_features()
+                
+            # 创建工况名称
+            file_name = os.path.basename(self.file_path) if self.file_path else None
+            name = f"工况 {len(self.workcase_data) + 1}"
+            if file_name:
+                name = f"{name} ({file_name})"
+                
+            # 记录当前参数
+            current_parameters = {}
+            if hasattr(self, 'params'):
+                current_parameters = copy.deepcopy(self.params)
+            
+            # 创建工况数据(深拷贝，避免后续修改影响已保存的工况)
+            workcase = {
+                'name': name,
+                'file_name': file_name,
+                'file_path': self.file_path,
+                'processed_data': copy.deepcopy(self.processed_data),
+                'cycles': copy.deepcopy(self.cycles),
+                'cycle_features': copy.deepcopy(self.cycle_features),
+                'parameters': current_parameters
+            }
+            
+            # 添加到工况数据列表
+            self.workcase_data.append(workcase)
+            
+            logging.info(f"成功添加工况: {name}, 当前工况总数: {len(self.workcase_data)}")
+            
+            return True, f"已添加工况: {name}\n当前工况总数: {len(self.workcase_data)}"
             
         except Exception as e:
-            logger.error(f"导出结果出错: {str(e)}", exc_info=True)
-            return False, f"导出结果出错: {str(e)}"
+            import traceback
+            traceback.print_exc()
+            return False, f"添加工况过程中发生错误: {str(e)}"
+            
+    def clear_workcase_data(self):
+        """清空工况数据"""
+        self.workcase_data = []
